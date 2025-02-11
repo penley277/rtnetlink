@@ -10,6 +10,7 @@ use nix::{
     },
     unistd::{fork, ForkResult},
 };
+use std::process::Command;
 use std::{os::fd::BorrowedFd, path::Path, process::exit};
 
 // if "only" smol or smol+tokio were enabled, we use smol because
@@ -99,6 +100,51 @@ impl NetworkNamespace {
                     "Namespace file remove failed (are you running as root?)",
                 );
                 return Err(Error::NamespaceError(err_msg));
+            }
+
+            Ok(())
+        })
+        .await
+    }
+
+    /// 执行命令 `ip netns exec NS_NAME COMMAND`
+    pub async fn exec(
+        ns_name: String,
+        command: Vec<String>,
+    ) -> Result<(), Error> {
+        try_spawn_blocking(move || {
+            let mut netns_path = String::new();
+            netns_path.push_str(NETNS_PATH);
+            netns_path.push_str(&ns_name);
+            let ns_path = Path::new(&netns_path);
+
+            // 确保 netns 存在
+            if !ns_path.exists() {
+                return Err(Error::NamespaceError(format!(
+                    "Namespace {} does not exist",
+                    ns_name
+                )));
+            }
+
+            // 构造 `ip netns exec` 命令
+            let output = Command::new("ip")
+                .arg("netns")
+                .arg("exec")
+                .arg(&ns_name)
+                .args(&command)
+                .output()
+                .map_err(|e| {
+                    Error::NamespaceError(format!(
+                        "Failed to execute command: {}",
+                        e
+                    ))
+                })?;
+
+            if !output.status.success() {
+                return Err(Error::NamespaceError(format!(
+                    "Command failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                )));
             }
 
             Ok(())
